@@ -18,8 +18,20 @@ class User
     #[ORM\Column(type: 'integer')]
     private $id;
 
+    /**
+     * A username ends up in the principal URI (`principals/<username>`), so it must not carry
+     * anything that would change that path's structure. Letters, digits and `_ . @ + ' -` are
+     * allowed: the punctuation is what shows up in mail-derived login names.
+     *
+     * Only checked in the `creation` validation group, so that an account whose name does not
+     * match — an LDAP or IMAP login, say — stays editable.
+     */
+    public const USERNAME_PATTERN = '/^[a-zA-Z0-9_.@+\'-]+$/';
+
     #[ORM\Column(type: 'string', length: 255, unique: true)]
     #[Assert\NotBlank]
+    #[Assert\Length(max: 255, groups: ['creation'])]
+    #[Assert\Regex(pattern: self::USERNAME_PATTERN, message: 'form.username.invalid', groups: ['creation'])]
     private $username;
 
     #[ORM\Column(name: 'digesta1', type: 'string', length: 255)]
@@ -28,6 +40,14 @@ class User
     public function getId(): ?int
     {
         return $this->id;
+    }
+
+    /**
+     * A user's principal is always `principals/<username>`.
+     */
+    public function getPrincipalUri(): string
+    {
+        return Principal::PREFIX.$this->username;
     }
 
     public function getUsername(): ?string

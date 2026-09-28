@@ -54,7 +54,7 @@ class BirthdayServiceTest extends KernelTestCase
             ->setUri('default')
             ->setDisplayName('Default')
             ->setDescription('')
-            ->setSynctoken('1')
+            ->setSynctoken(1)
             ->setIncludedInBirthdayCalendar($includedInBirthdayCalendar);
         $this->em->persist($addressBook);
         $this->em->flush();
@@ -158,6 +158,29 @@ class BirthdayServiceTest extends KernelTestCase
     // -------------------------------------------------------------------------
     // onCardChanged
     // -------------------------------------------------------------------------
+
+    /**
+     * Deleting an address book deletes its cards, so these hooks run for a book that is already
+     * gone and have to return quietly.
+     */
+    public function testOnCardChangedIgnoresAnAddressBookThatNoLongerExists(): void
+    {
+        $this->service->onCardChanged(
+            999999,
+            'john.vcf',
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nUID:1234\r\nBDAY:19900615\r\nEND:VCARD\r\n"
+        );
+
+        $this->em->clear();
+        $this->assertNull($this->em->getRepository(CalendarObject::class)->findOneBy(['uri' => 'default-john.vcf.ics']));
+    }
+
+    public function testOnCardDeletedIgnoresAnAddressBookThatNoLongerExists(): void
+    {
+        $this->service->onCardDeleted(999999, 'john.vcf');
+
+        $this->expectNotToPerformAssertions();
+    }
 
     public function testOnCardChangedSkipsIfNotIncludedInBirthdayCalendar(): void
     {

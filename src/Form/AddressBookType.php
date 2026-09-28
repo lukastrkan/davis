@@ -5,7 +5,6 @@ namespace App\Form;
 use App\Entity\AddressBook;
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
-use Symfony\Component\Form\Extension\Core\Type\HiddenType;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\Extension\Core\Type\TextareaType;
 use Symfony\Component\Form\Extension\Core\Type\TextType;
@@ -17,9 +16,6 @@ class AddressBookType extends AbstractType
     public function buildForm(FormBuilderInterface $builder, array $options): void
     {
         $builder
-            ->add('principalUri', HiddenType::class, [
-                'required' => true,
-            ])
             ->add('uri', TextType::class, [
                 'label' => 'form.uri',
                 'disabled' => !$options['new'],
@@ -28,6 +24,8 @@ class AddressBookType extends AbstractType
             ->add('displayName', TextType::class, [
                 'label' => 'form.displayName',
                 'help' => 'form.name.help.carddav',
+                // Optional in CardDAV: clients may create an address book without one
+                'required' => false,
             ])
             ->add('includedInBirthdayCalendar', ChoiceType::class, [
                 'label' => 'form.includedInBirthdayCalendar',

@@ -24,6 +24,23 @@ class CalendarInstanceRepository extends ServiceEntityRepository
     }
 
     /**
+     * Returns every instance the principal has, with its `calendars` row already loaded. Every
+     * caller reads it, so leaving it lazy costs one extra query per calendar.
+     *
+     * @return CalendarInstance[]
+     */
+    public function findByPrincipalUriWithCalendars(string $principalUri): array
+    {
+        return $this->createQueryBuilder('c')
+            ->addSelect('cal')
+            ->join('c.calendar', 'cal')
+            ->where('c.principalUri = :principalUri')
+            ->setParameter('principalUri', $principalUri)
+            ->getQuery()
+            ->getResult();
+    }
+
+    /**
      * @return CalendarInstance[] Returns an array of CalendarInstance objects
      */
     public function findSharedInstancesOfInstance(int $calendarId, bool $withCalendar = false)
@@ -63,6 +80,30 @@ class CalendarInstanceRepository extends ServiceEntityRepository
             ->getOneOrNullResult();
     }
 
+    /**
+     * Returns the instance only if it belongs to the given principal (owner or sharee).
+     */
+    public function findOneForPrincipal(int $id, string $principalUri): ?CalendarInstance
+    {
+        return $this->findOneBy(['id' => $id, 'principalUri' => $principalUri]);
+    }
+
+    /**
+     * Returns the principal's *owner* instance of the given calendar, if any.
+     */
+    public function findOwnerInstanceOfCalendarForPrincipal(int $calendarId, string $principalUri): ?CalendarInstance
+    {
+        return $this->createQueryBuilder('c')
+            ->where('c.calendar = :id')
+            ->setParameter('id', $calendarId)
+            ->andWhere('c.principalUri = :principalUri')
+            ->setParameter('principalUri', $principalUri)
+            ->andWhere('c.access IN (:ownerAccess)')
+            ->setParameter('ownerAccess', CalendarInstance::getOwnerAccesses())
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
     public function hasDifferentOwner(int $calendarId, string $principalUri): bool
     {
         return $this->createQueryBuilder('c')
@@ -77,13 +118,13 @@ class CalendarInstanceRepository extends ServiceEntityRepository
             ->getSingleScalarResult() > 0;
     }
 
-
     public function findAllSchedulingObjectsForCalendar(int $calendarInstanceId, string $principalUri): array
     {
         $objectRepository = $this->getEntityManager()->getRepository(SchedulingObject::class);
+
         return $objectRepository->createQueryBuilder('s')
-            ->leftJoin(CalendarObject::class, 'c', \Doctrine\ORM\Query\Expr\Join::WITH, 'c.uri = s.uri')
-            ->leftJoin(CalendarInstance::class, 'ci', \Doctrine\ORM\Query\Expr\Join::WITH, 'ci.calendar = c.calendar')
+            ->innerJoin(CalendarObject::class, 'c', \Doctrine\ORM\Query\Expr\Join::WITH, 'c.uri = s.uri')
+            ->innerJoin(CalendarInstance::class, 'ci', \Doctrine\ORM\Query\Expr\Join::WITH, 'ci.calendar = c.calendar')
             ->where('ci.id = :id')
             // uri is not unique across calendars — two different calendars can have objects with the same uri.
             // The join should also filter by principaluri as a consequence
@@ -92,6 +133,38 @@ class CalendarInstanceRepository extends ServiceEntityRepository
             ->setParameter('principalUri', $principalUri)
             ->getQuery()
             ->getResult();
+    }
+
+    /**
+     * Counts the objects of several calendars at once, so that listing a principal's calendars
+     * costs a single query instead of one per calendar.
+     *
+     * @param int[] $calendarIds
+     *
+     * @return array<int, int> count per calendar id, including the calendars that hold nothing
+     */
+    public function countObjectsByCalendar(array $calendarIds): array
+    {
+        $counts = array_fill_keys($calendarIds, 0);
+
+        if (!$calendarIds) {
+            return $counts;
+        }
+
+        $results = $this->getEntityManager()->getRepository(CalendarObject::class)
+            ->createQueryBuilder('o')
+            ->select('IDENTITY(o.calendar) AS calendarId, COUNT(o.id) AS count')
+            ->where('o.calendar IN (:calendarIds)')
+            ->setParameter('calendarIds', $calendarIds)
+            ->groupBy('o.calendar')
+            ->getQuery()
+            ->getResult();
+
+        foreach ($results as $result) {
+            $counts[(int) $result['calendarId']] = (int) $result['count'];
+        }
+
+        return $counts;
     }
 
     /**

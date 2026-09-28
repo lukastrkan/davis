@@ -2,12 +2,15 @@
 
 namespace App\Tests\Functional;
 
+use App\Entity\Principal;
 use App\Entity\User;
 use App\Security\AdminUser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 class UserControllerTest extends WebTestCase
 {
+    use AdminPostTrait;
+
     private function getUserId($client, string $username): int
     {
         $userRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(User::class);
@@ -88,6 +91,36 @@ class UserControllerTest extends WebTestCase
         $this->assertAnySelectorTextContains('h5', 'New test User');
     }
 
+    /**
+     * The address is what sabre puts in the principal's `calendar-user-address-set`, and it only
+     * emits a scheduling message when the event's organiser matches one of those. An account saved
+     * without an address therefore never sends an invitation, and nothing says so at the time.
+     */
+    public function testUserCreationRequiresAnEmailAddress(): void
+    {
+        $client = static::createClient();
+        $client->loginUser(new AdminUser('admin', 'test'));
+
+        foreach (['', 'not-an-address'] as $email) {
+            $crawler = $client->request('GET', '/users/new');
+            $form = $crawler->selectButton('user_save')->form();
+
+            $client->submit($form, [
+                'user[username]' => 'no_email_user',
+                'user[displayName]' => 'No email',
+                'user[email]' => $email,
+                'user[password][first]' => 'coucou',
+                'user[password][second]' => 'coucou',
+            ]);
+
+            $this->assertResponseIsSuccessful(sprintf('"%s" should be refused by the form', $email));
+            $this->assertSelectorExists('.invalid-feedback, .form-error-message');
+        }
+
+        $em = static::getContainer()->get('doctrine.orm.entity_manager');
+        $this->assertNull($em->getRepository(User::class)->findOneBy(['username' => 'no_email_user']));
+    }
+
     public function testUserDelete(): void
     {
         $user = new AdminUser('admin', 'test');
@@ -98,14 +131,14 @@ class UserControllerTest extends WebTestCase
         $userId1 = $this->getUserId($client, 'test_user');
         $userId2 = $this->getUserId($client, 'test_user2');
 
-        $client->request('GET', '/users/delete/'.$userId1);
+        $this->postAdmin($client, '/users/delete/'.$userId1);
 
         $this->assertResponseRedirects('/users/');
         $client->followRedirect();
 
         $this->assertAnySelectorTextContains('h5', 'Test User 2');
 
-        $client->request('GET', '/users/delete/'.$userId2);
+        $this->postAdmin($client, '/users/delete/'.$userId2);
 
         $this->assertResponseRedirects('/users/');
         $client->followRedirect();
@@ -130,9 +163,9 @@ class UserControllerTest extends WebTestCase
         $this->assertSelectorTextContains('h1', 'Delegates for Test User');
         $this->assertSelectorTextContains('a.btn', '+ Add a delegate');
         $this->assertAnySelectorTextContains('div', 'Delegation is enabled for this account.');
-        $this->assertAnySelectorTextContains('a.btn', 'Disable it');
+        $this->assertAnySelectorTextContains('button.btn', 'Disable it');
 
-        $client->clickLink('Disable it');
+        $client->submitForm('Disable it');
 
         $this->assertResponseRedirects('/users/delegates/'.$userId);
         $client->followRedirect();
@@ -141,6 +174,128 @@ class UserControllerTest extends WebTestCase
         $this->assertSelectorTextContains('h1', 'Delegates for Test User');
         $this->assertSelectorTextNotContains('a.btn', '+ Add a delegate');
         $this->assertAnySelectorTextContains('div', 'Delegation is not enabled for this account.');
-        $this->assertAnySelectorTextContains('a.btn', 'Enable it');
+        $this->assertAnySelectorTextContains('button.btn', 'Enable it');
+    }
+
+    public function testUserDelegateAddAndRemove(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+        $principalRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(Principal::class);
+        $delegate = $principalRepository->findOneByUri(Principal::PREFIX.'test_user2');
+        $writeProxy = $principalRepository->findOneByUri(Principal::PREFIX.'test_user'.Principal::WRITE_PROXY_SUFFIX);
+
+        $this->postAdmin($client, '/users/delegates/'.$userId.'/add', ['principalId' => $delegate->getId(), 'write' => 'true']);
+
+        $this->assertResponseRedirects('/users/delegates/'.$userId);
+        $client->followRedirect();
+        $this->assertAnySelectorTextContains('h5', 'Test User 2');
+
+        $this->postAdmin($client, '/users/delegates/'.$userId.'/remove/'.$writeProxy->getId().'/'.$delegate->getId());
+
+        $this->assertResponseRedirects('/users/delegates/'.$userId);
+        $client->followRedirect();
+        $this->assertSelectorTextNotContains('h5', 'Test User 2');
+    }
+
+    public function testStateChangingRoutesRejectGet(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        foreach ([
+            '/users/delete/'.$userId,
+            '/users/delegation/'.$userId.'/off',
+            '/users/delegates/'.$userId.'/add?principalId=1&write=true',
+            '/users/delegates/'.$userId.'/remove/1/2',
+        ] as $url) {
+            $client->request('GET', $url);
+            $this->assertResponseStatusCodeSame(405, 'GET '.$url.' must not be allowed');
+        }
+
+        // Nothing was deleted
+        $this->assertNotNull(static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(User::class)->findOneByUsername('test_user'));
+    }
+
+    public function testUserDeleteRejectsInvalidCsrfToken(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        $client->request('POST', '/users/delete/'.$userId, ['_token' => 'not-the-token']);
+        $this->assertResponseStatusCodeSame(403);
+
+        $client->request('POST', '/users/delete/'.$userId);
+        $this->assertResponseStatusCodeSame(403);
+
+        $this->assertNotNull(static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(User::class)->findOneByUsername('test_user'));
+    }
+
+    public function testDelegateRemoveThroughAnotherUsersProxyIs404(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+        $principalRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(Principal::class);
+        $delegate = $principalRepository->findOneByUri(Principal::PREFIX.'test_user2');
+        $foreignProxy = $principalRepository->findOneByUri(Principal::PREFIX.'test_user2'.Principal::READ_PROXY_SUFFIX);
+
+        $this->postAdmin($client, '/users/delegates/'.$userId.'/remove/'.$foreignProxy->getId().'/'.$delegate->getId());
+        $this->assertResponseStatusCodeSame(404);
+    }
+
+    public function testUserCreationRejectsAUsernameThatBreaksThePrincipalUri(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $crawler = $client->request('GET', '/users/new');
+        $form = $crawler->selectButton('user_save')->form();
+
+        $client->submit($form, [
+            'user[username]' => 'bad/user',
+            'user[displayName]' => 'Bad User',
+            'user[email]' => 'bad@example.org',
+            'user[password][first]' => 'secret',
+            'user[password][second]' => 'secret',
+        ]);
+
+        // The form is re-rendered rather than redirecting, and nothing is created
+        $this->assertResponseIsSuccessful();
+        $this->assertNull(
+            static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(User::class)->findOneByUsername('bad/user')
+        );
+    }
+
+    /**
+     * Every admin test authenticates first, so a missing `access_control` entry would go
+     * unnoticed — which is exactly how the `^/adressbooks` typo of #268 shipped.
+     */
+    public function testUserPagesAreNotReachableAnonymously(): void
+    {
+        $client = static::createClient();
+
+        foreach (['/users/', '/users/new', '/users/edit/1', '/users/delegates/1'] as $url) {
+            $client->request('GET', $url);
+
+            $this->assertResponseRedirects('/login', null, $url.' must not be public');
+        }
     }
 }

@@ -3,10 +3,6 @@
 }
 
 :9000 {
-	# Redirect .well-known
-	redir /.well-known/caldav  /dav/
-	redir /.well-known/carddav /dav/
-
         root * /var/www/davis/public
         php_fastcgi unix//var/run/php-fpm/php-fpm.sock {
                 # Preserve the original X-Forwarded-Proto from upstream, as it might be HTTPS
@@ -29,10 +25,16 @@
                 -X-Powered-By
 
                 # keep referrer data off of HTTP connections
-                Referrer-Policy no-referrer-when-downgrade
+                Referrer-Policy strict-origin-when-cross-origin
 
                 # disable clients from sniffing the media type
                 X-Content-Type-Options nosniff
+
+                # the admin UI is never meant to be framed
+                X-Frame-Options DENY
+
+                # no browser feature is needed
+                Permissions-Policy "camera=(), microphone=(), geolocation=()"
         }
 
 }

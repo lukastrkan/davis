@@ -1,13 +1,13 @@
 Davis
 ---
 
-[![Build Status][ci_badge]][ci_link]
+[![Build Status](https://github.com/tchapi/davis/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tchapi/davis/actions/workflows/ci.yml)
 [![Publish Docker image](https://github.com/tchapi/davis/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/tchapi/davis/actions/workflows/main.yml)
-[![Latest release][release_badge]][release_link]
-[![License](https://img.shields.io/github/license/tchapi/davis)](https://github.com/tchapi/davis/blob/main/LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/tchapi/davis?cacheSeconds=3600)](https://github.com/tchapi/davis/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/tchapi/davis/blob/main/LICENSE)
 ![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-blue?logo=docker)
 ![PHP Version](https://img.shields.io/badge/php-8.2%20%7C%208.3%20%7C%208.4-777BB4?logo=php&logoColor=white)
-[![Sponsor me][sponsor_badge]][sponsor_link]
+[![Sponsor me](https://img.shields.io/badge/sponsor%20me-🙏-blue?logo=paypal)](https://paypal.me/tchap)
 
 A modern, simple, feature-packed, fully translatable DAV server, admin interface and frontend based on `sabre/dav`, built with [Symfony 7](https://symfony.com/) and [Bootstrap 5](https://getbootstrap.com/), initially inspired by [Baïkal](https://github.com/sabre-io/Baikal) (_see dependencies table below for more detail_)
 
@@ -167,6 +167,21 @@ INVITE_FROM_ADDRESS=no-reply@example.org
 > If the username, password or host contain any character considered special in a URI (such as `: / ? # [ ] @ ! $ & ' ( ) * + , ; =`), you MUST encode them.
 > See [here](https://symfony.com/doc/current/mailer.html#transport-setup) for more details.
 
+If `INVITE_FROM_ADDRESS` is empty, Davis does not send scheduling emails at all and logs a warning when the DAV endpoint starts.
+
+Invitations are only produced for events whose `ORGANIZER` matches the organiser's own address, and that address is the `email` of their principal — the *Email* field of the account in the dashboard. If it is empty or different from what the calendar client sends, the server has nothing to send an invitation about and stays silent. To find accounts in that state:
+
+```sql
+SELECT uri, email FROM principals WHERE email IS NULL OR email = '';
+```
+
+To check the mailer itself without creating an event:
+
+```shell
+php bin/console davis:mail:test you@example.org
+```
+
+
 **f. The reminder offset for all birthdays**
 
 You must specify a relative duration, as specified in [the RFC 5545 spec](https://www.rfc-editor.org/rfc/rfc5545.html#section-3.3.6)
@@ -194,8 +209,21 @@ BIRTHDAY_REMINDER_OFFSET=false
 ```shell
 WEBDAV_TMP_DIR=/webdav/tmp
 WEBDAV_PUBLIC_DIR=/webdav/public
+WEBDAV_PUBLIC_DIR_WRITABLE=false
 WEBDAV_HOMES_DIR=
 ```
+
+> [!NOTE]
+>
+> The public directory (served at `/dav/public`) is readable by every authenticated user. By default only users flagged as admins in the dashboard can create, modify or delete files in it; set `WEBDAV_PUBLIC_DIR_WRITABLE=true` to let every authenticated user write to it. The Diagnostics page of the dashboard shows which of the two applies.
+
+> [!IMPORTANT]
+>
+> Up to Davis 5.4 included, every authenticated user could write to the public directory. If you relied on that (a shared drop folder), set `WEBDAV_PUBLIC_DIR_WRITABLE=true` when upgrading, otherwise your users will get a `403` when saving files there.
+
+> [!NOTE]
+>
+> The directories must be absolute paths and must not live inside the web root (Davis refuses to start the DAV server otherwise). The tmp dir and the homes dir must not be inside the public dir either, and vice versa.
 
 > [!NOTE]
 >
@@ -203,7 +231,7 @@ WEBDAV_HOMES_DIR=
 
 > [!NOTE]
 >
-> By default, home directories are disabled totally (the env var is set to an empty string). If needed, it is recommended to use a folder that is **NOT** a child of the public dir, such as `/webdav/homes` for instance, so that users cannot access other users' homes.
+> By default, home directories are disabled totally (the env var is set to an empty string). If needed, use a folder that is **NOT** a child of the public dir, such as `/webdav/homes` for instance, so that users cannot access other users' homes: Davis checks this and refuses to start the DAV server otherwise.
 
 **h. The log file path**
 
@@ -234,6 +262,24 @@ If you're behind one or several proxies, the TLS termination might be upstream a
 ```shell
 SYMFONY_TRUSTED_PROXIES=127.0.0.1,REMOTE_ADDR
 ```
+
+> [!WARNING]
+>
+> **If your PHP was built without IPv6** (`--disable-ipv6`, as some source-based distributions do),
+> your proxy must connect to Davis over **IPv4**, or every request returns a 500 with
+> `RuntimeException: Unable to check Ipv6. Check that PHP was not compiled with option "disable-ipv6"`.
+>
+> Symfony picks its IPv4/IPv6 comparison from the address the request *came from*, not from the
+> value you set here, so listing only IPv4 proxies does **not** avoid it. In practice this means
+> writing the proxy target as `127.0.0.1` rather than `localhost`, which usually resolves to `::1`
+> first:
+>
+> ```apache
+> ProxyPass / http://127.0.0.1:9000/
+> ```
+>
+> Unsetting `SYMFONY_TRUSTED_PROXIES` also avoids the error, but then Davis no longer sees the
+> `X-Forwarded-*` headers and generates URLs with the wrong scheme or host.
 
 #### Overriding the dotenv (`.env`) path
 
@@ -385,6 +431,10 @@ dav.domain.tld {
         FallbackResource disabled
     </Directory>
 
+    # If you proxy to Davis rather than serving it directly, target 127.0.0.1 and not localhost:
+    # on a PHP built without IPv6, a request arriving from ::1 returns a 500.
+    # ProxyPass / http://127.0.0.1:9000/
+
     # Env vars (if you did not use .env.local)
     SetEnv APP_ENV prod
     SetEnv APP_SECRET <app-secret-id>
@@ -438,24 +488,11 @@ More examples and information [here](https://symfony.com/doc/current/setup/web_s
 
 Web-based protocols like CalDAV and CardDAV can be found using a discovery service. Some clients require that you implement a path prefix to point to the correct location for your service. See [here](https://en.wikipedia.org/wiki/List_of_/.well-known/_services_offered_by_webservers) for more info.
 
-If you use Apache as your webserver, you can enable the redirections with:
+Davis answers `/.well-known/caldav` and `/.well-known/carddav` itself and redirects them to its DAV endpoint, so **no web server configuration is needed**. Because the redirect is built from the application's own base path, it also works when Davis is installed in a sub-directory (`https://example.org/davis/`), which a hard-coded `/dav/` rewrite does not.
 
-```apache
-RewriteEngine On
-RewriteRule ^\.well-known/carddav /dav/ [R=301,L]
-RewriteRule ^\.well-known/caldav /dav/ [R=301,L]
-```
-
-Make sure that `mod_rewrite` is enabled on your installation beforehand.
-
-If you use Nginx, you can add this to your configuration:
-
-```nginx
-location / {
-    rewrite ^/.well-known/carddav /dav/ redirect;
-    rewrite ^/.well-known/caldav /dav/ redirect;
-}
-```
+> [!NOTE]
+>
+> If your web server still rewrites these two paths itself (earlier versions of this README suggested doing so), you can remove those rules: they take precedence over Davis and will send clients to the wrong place on a sub-directory installation.
 
 # 🐳 Dockerized installation
 
@@ -596,6 +633,18 @@ Below are some issues that can bring more info / insight into custom setups that
 
 ## 🐛 Troubleshooting
 
+### Start with the diagnostics page
+
+The dashboard tells you how many points need your attention and links to **Diagnostics**(`/dashboard/diagnostics`), which is usually the fastest way to find out why something configured does not happen.
+
+![Diagnostics page](_screenshots/diagnostics.png)
+
+It groups the checks into Runtime, Database, Authentication, Scheduling and mail, and Endpoints, and each one that needs action says what to do about it and gives the command or query to run. Among other things it reports migrations that have not been run, the database engine actually in use, whether the log directory is writable, whether the selected authentication method has the PHP extension it needs, and how many accounts have no email address and therefore never send an invitation.
+
+Everything on it is read-only and passive — no connection is opened, so it stays usable when something is down. Credentials are never shown: the mail transport is displayed as scheme and host only. Use `bin/console davis:mail:test you@example.org` to actually exercise the mailer.
+
+### Logs
+
 Depending on how you run Davis, logs are either:
   - [dev] printed out directly in the console
   - [dev] available in the Symfony Debug Bar in the [Profiler](https://symfony.com/doc/current/profiler.html)
@@ -611,12 +660,9 @@ Depending on how you run Davis, logs are either:
 > docker exec -it davis tail /var/www/davis/var/log/prod.log
 > ```
 
-### I have a "Bad timezone configuration env var" error on the dashboard
+### I have a "Bad timezone configuration env var" error
 
-If you see this:
-
-![Bad timezone configuration env var error](_screenshots/bad_timezone_configuration_env_var.png)
-
+The **Server timezone** check on the [diagnostics page](#start-with-the-diagnostics-page) flags it.
 It means that the value you set for the `APP_TIMEZONE` env var is not a correct timezone, as per [the official list](https://www.php.net/manual/en/timezones.php). Your timezone has thus not been set and is the server's default (Here, UTC). Adjust the setting accordingly.
 
 ### I have a 500 and no tables have been created
@@ -635,7 +681,7 @@ In a shell, if you run Davis locally:
 
 ### I have a 500 and a log about `Uncaught Error: Class "Symfony\Bundle\WebProfilerBundle\WebProfilerBundle" not found`
 
-You are running the app in dev mode, but you haven't installed the dev dependencies. Either:
+You are running the app in dev mode, but you haven't installed the dev dependencies (the Docker images default to `APP_ENV=prod`, so this only happens if you override it). Either:
 
 a. Set `APP_ENV=prod` in your local env file (See configuration above)
 
@@ -686,12 +732,3 @@ _This project does not use any pipeline for the assets since the frontend side i
 # ⚖️ Licence
 
 This project is release under the MIT licence. See the LICENCE file
-
-[ci_badge]: https://github.com/tchapi/davis/workflows/CI/badge.svg
-[ci_link]: https://github.com/tchapi/davis/actions?query=workflow%3ACI
-
-[sponsor_badge]: https://img.shields.io/badge/sponsor%20me-🙏-blue?logo=paypal
-[sponsor_link]: https://paypal.me/tchap
-
-[release_badge]: https://img.shields.io/github/v/release/tchapi/davis
-[release_link]: https://github.com/tchapi/davis/releases

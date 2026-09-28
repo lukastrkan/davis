@@ -6,8 +6,8 @@ use App\Entity\Calendar;
 use App\Entity\CalendarInstance;
 use App\Entity\CalendarSubscription;
 use App\Entity\Principal;
-use App\Entity\SchedulingObject;
 use App\Entity\User;
+use App\Services\Utils;
 use Doctrine\Persistence\ManagerRegistry;
 use Sabre\DAV\Sharing\Plugin as SharingPlugin;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -27,7 +27,7 @@ class ApiController extends AbstractController
      */
     private function validateUsername(string $username): bool
     {
-        return !empty($username) && is_string($username) && !preg_match('/[^a-zA-Z0-9_.@-]/', $username);
+        return Utils::isValidUsername($username);
     }
 
     /**
@@ -48,6 +48,17 @@ class ApiController extends AbstractController
     private function resolveUser(ManagerRegistry $doctrine, int $userId): ?User
     {
         return $doctrine->getRepository(User::class)->findOneById($userId);
+    }
+
+    /**
+     * Resolves a calendar instance that belongs to the principal *as an owner*
+     * (a calendar merely shared with the principal does not qualify).
+     */
+    private function resolveOwnerInstance(ManagerRegistry $doctrine, int $calendarInstanceId, string $principalUri): ?CalendarInstance
+    {
+        $instance = $doctrine->getRepository(CalendarInstance::class)->findOneForPrincipal($calendarInstanceId, $principalUri);
+
+        return $instance && !$instance->isShared() ? $instance : null;
     }
 
     /**
@@ -111,7 +122,7 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principal = $doctrine->getRepository(Principal::class)->findOneByUri(Principal::PREFIX.$user->getUsername());
+        $principal = $doctrine->getRepository(Principal::class)->findOneByUri($user->getPrincipalUri());
 
         if (!$principal) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
@@ -151,13 +162,13 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $allCalendars = $doctrine->getRepository(CalendarInstance::class)->findByPrincipalUri($principalUri);
+        $allCalendars = $doctrine->getRepository(CalendarInstance::class)->findByPrincipalUriWithCalendars($principalUri);
         $allSubscriptions = $doctrine->getRepository(CalendarSubscription::class)->findByPrincipalUri($principalUri);
 
         $calendars = [];
@@ -185,18 +196,14 @@ class ApiController extends AbstractController
 
         $subscriptions = [];
         foreach ($allSubscriptions as $subscription) {
-            $objectCounts = $doctrine->getRepository(CalendarInstance::class)->getObjectCountsByComponentType($subscription->getCalendar()->getId());
-            $eventsCount = $subscription->getCalendar()->isComponentEnabled(Calendar::COMPONENT_EVENTS) ? $objectCounts['events'] : null;
-            $notesCount = $subscription->getCalendar()->isComponentEnabled(Calendar::COMPONENT_NOTES) ? $objectCounts['notes'] : null;
-            $tasksCount = $subscription->getCalendar()->isComponentEnabled(Calendar::COMPONENT_TODOS) ? $objectCounts['tasks'] : null;
-
+            // A subscription is a remote feed: it has no local calendar, hence no object counts
             $subscriptions[] = [
                 'id' => $subscription->getId(),
                 'uri' => $subscription->getUri(),
                 'displayname' => $subscription->getDisplayName(),
-                'events' => $eventsCount,
-                'notes' => $notesCount,
-                'tasks' => $tasksCount,
+                'events' => null,
+                'notes' => null,
+                'tasks' => null,
             ];
         }
 
@@ -230,13 +237,13 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $allCalendars = $doctrine->getRepository(CalendarInstance::class)->findByPrincipalUri($principalUri);
+        $allCalendars = $doctrine->getRepository(CalendarInstance::class)->findByPrincipalUriWithCalendars($principalUri);
 
         $calendar_details = [];
         foreach ($allCalendars as $calendar) {
@@ -288,7 +295,7 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
@@ -391,24 +398,16 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $ownerInstance = $doctrine->getRepository(CalendarInstance::class)->findOneBy([
-            'id' => $calendar_id,
-            'principalUri' => $principalUri,
-        ]);
-
-        if (!$ownerInstance) {
-            return $this->json(['status' => 'error', 'message' => 'Invalid Calendar ID', 'timestamp' => $this->getTimestamp()], 400);
-        }
-
-        $calendarInstance = $doctrine->getRepository(CalendarInstance::class)->findOneById($calendar_id);
+        // Only the owner of a calendar can edit it (a sharee's instance is not theirs to change)
+        $calendarInstance = $this->resolveOwnerInstance($doctrine, $calendar_id, $principalUri);
         if (!$calendarInstance) {
-            return $this->json(['status' => 'error', 'message' => 'Calendar Instance Not Found', 'timestamp' => $this->getTimestamp()], 404);
+            return $this->json(['status' => 'error', 'message' => 'Invalid Calendar ID', 'timestamp' => $this->getTimestamp()], 400);
         }
 
         // Parse JSON body
@@ -478,16 +477,13 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $instance = $doctrine->getRepository(CalendarInstance::class)->findOneBy([
-            'id' => $calendar_id,
-            'principalUri' => $principalUri,
-        ]);
+        $instance = $doctrine->getRepository(CalendarInstance::class)->findOneForPrincipal($calendar_id, $principalUri);
 
         if (!$instance) {
             return $this->json(['status' => 'error', 'message' => 'Invalid Instance Not Found', 'timestamp' => $this->getTimestamp()], 400);
@@ -495,13 +491,17 @@ class ApiController extends AbstractController
 
         try {
             $entityManager = $doctrine->getManager();
-            $calendarsSubscriptions = $doctrine->getRepository(CalendarSubscription::class)->findByPrincipalUri($instance->getPrincipalUri());
-            $schedulingObjects = $doctrine->getRepository(SchedulingObject::class)->findByPrincipalUri($instance->getPrincipalUri());
 
-            // Remove calendar objects
-            foreach ($calendarsSubscriptions ?? [] as $subscription) {
-                $entityManager->remove($subscription);
+            // A calendar shared *with* this user is not theirs to delete: only drop their access to it
+            if ($instance->isShared()) {
+                $entityManager->remove($instance);
+                $entityManager->flush();
+
+                return $this->json(['status' => 'success', 'timestamp' => $this->getTimestamp()], 200);
             }
+
+            // Scheduling objects attached to the calendar objects of this calendar only
+            $schedulingObjects = $doctrine->getRepository(CalendarInstance::class)->findAllSchedulingObjectsForCalendar($instance->getId(), $principalUri);
             foreach ($schedulingObjects ?? [] as $object) {
                 $entityManager->remove($object);
             }
@@ -547,16 +547,13 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $ownerInstance = $doctrine->getRepository(CalendarInstance::class)->findOneBy([
-            'id' => $calendar_id,
-            'principalUri' => $principalUri,
-        ]);
+        $ownerInstance = $this->resolveOwnerInstance($doctrine, $calendar_id, $principalUri);
 
         if (!$ownerInstance) {
             return $this->json(['status' => 'error', 'message' => 'Invalid Calendar ID/Username', 'timestamp' => $this->getTimestamp()], 400);
@@ -570,7 +567,8 @@ class ApiController extends AbstractController
             $principalId = $doctrine->getRepository(Principal::class)->findOneByUri($instance[0]['principalUri']);
 
             $instanceUsername = mb_substr($instance[0]['principalUri'], strlen(Principal::PREFIX));
-            $instanceUserId = $doctrine->getRepository(User::class)->findOneByUsername($instanceUsername)->getId();
+            // A sharee principal may have no user row (deleted user, external principal)
+            $instanceUserId = $doctrine->getRepository(User::class)->findOneByUsername($instanceUsername)?->getId();
 
             $calendars[] = [
                 'username' => $instanceUsername,
@@ -608,18 +606,15 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $ownerInstance = $doctrine->getRepository(CalendarInstance::class)->findOneBy([
-            'id' => $calendar_id,
-            'principalUri' => $principalUri,
-        ]);
+        $instance = $this->resolveOwnerInstance($doctrine, $calendar_id, $principalUri);
 
-        if (!$ownerInstance) {
+        if (!$instance) {
             return $this->json(['status' => 'error', 'message' => 'Invalid Calendar ID and User ID', 'timestamp' => $this->getTimestamp()], 400);
         }
 
@@ -635,11 +630,13 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'Invalid Sharee ID/Write Access Value', 'timestamp' => $this->getTimestamp()], 400);
         }
 
-        $instance = $doctrine->getRepository(CalendarInstance::class)->findOneById($calendar_id);
         $newShareeToAdd = $doctrine->getRepository(Principal::class)->findOneByUri(Principal::PREFIX.$shareeUsername);
 
-        if (!$instance || !$newShareeToAdd) {
+        if (!$newShareeToAdd) {
             return $this->json(['status' => 'error', 'message' => 'Calendar Instance/User Not Found', 'timestamp' => $this->getTimestamp()], 404);
+        }
+        if ($newShareeToAdd->getUri() === $principalUri) {
+            return $this->json(['status' => 'error', 'message' => 'A Calendar Cannot Be Shared With Its Owner', 'timestamp' => $this->getTimestamp()], 400);
         }
 
         $existingSharedInstance = $doctrine->getRepository(CalendarInstance::class)->findSharedInstanceOfInstanceFor($instance->getCalendar()->getId(), $newShareeToAdd->getUri());
@@ -656,6 +653,7 @@ class ApiController extends AbstractController
                         ->setShareHref('mailto:'.$newShareeToAdd->getEmail())
                         ->setDescription($instance->getDescription())
                         ->setDisplayName($instance->getDisplayName())
+                        ->setCalendarColor($instance->getCalendarColor())
                         ->setUri(\Sabre\DAV\UUIDUtil::getUUID())
                         ->setPrincipalUri($newShareeToAdd->getUri())
                         ->setAccess($accessLevel);
@@ -686,18 +684,15 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $principalUri = Principal::PREFIX.$user->getUsername();
+        $principalUri = $user->getPrincipalUri();
 
         if (!$doctrine->getRepository(Principal::class)->findOneByUri($principalUri)) {
             return $this->json(['status' => 'error', 'message' => 'Principal Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 
-        $ownerInstance = $doctrine->getRepository(CalendarInstance::class)->findOneBy([
-            'id' => $calendar_id,
-            'principalUri' => $principalUri,
-        ]);
+        $instance = $this->resolveOwnerInstance($doctrine, $calendar_id, $principalUri);
 
-        if (!$ownerInstance) {
+        if (!$instance) {
             return $this->json(['status' => 'error', 'message' => 'Invalid Calendar ID', 'timestamp' => $this->getTimestamp()], 400);
         }
 
@@ -712,10 +707,9 @@ class ApiController extends AbstractController
             return $this->json(['status' => 'error', 'message' => 'Invalid Username', 'timestamp' => $this->getTimestamp()], 400);
         }
 
-        $instance = $doctrine->getRepository(CalendarInstance::class)->findOneById($calendar_id);
         $shareeToRemove = $doctrine->getRepository(Principal::class)->findOneByUri(Principal::PREFIX.$shareeUsername);
 
-        if (!$instance || !$shareeToRemove) {
+        if (!$shareeToRemove) {
             return $this->json(['status' => 'error', 'message' => 'Calendar Instance/User Not Found', 'timestamp' => $this->getTimestamp()], 404);
         }
 

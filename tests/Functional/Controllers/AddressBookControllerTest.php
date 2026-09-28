@@ -3,12 +3,15 @@
 namespace App\Tests\Functional;
 
 use App\Entity\AddressBook;
+use App\Entity\Principal;
 use App\Entity\User;
 use App\Security\AdminUser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 
 class AddressBookControllerTest extends WebTestCase
 {
+    use AdminPostTrait;
+
     private function getUserId($client, string $username): int
     {
         $userRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(User::class);
@@ -95,6 +98,70 @@ class AddressBookControllerTest extends WebTestCase
         $this->assertAnySelectorTextContains('h5', 'New test address book');
     }
 
+    /**
+     * `uri` and `displayname` are 255-char columns, so an over-long value has to be refused by the
+     * form. Without a length constraint it reaches the driver and comes back as a 500.
+     */
+    public function testAddressBookNewRefusesOverLongValues(): void
+    {
+        $client = static::createClient();
+        $client->loginUser(new AdminUser('admin', 'test'));
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        $crawler = $client->request('GET', '/addressbooks/'.$userId.'/new');
+        $form = $crawler->selectButton('address_book_save')->form();
+
+        $client->submit($form, [
+            'address_book[uri]' => str_repeat('a', 256),
+            'address_book[displayName]' => str_repeat('b', 256),
+            'address_book[description]' => 'too long',
+        ]);
+
+        $this->assertResponseIsSuccessful();
+        $this->assertSelectorExists('.invalid-feedback, .form-error-message');
+
+        $em = static::getContainer()->get('doctrine.orm.entity_manager');
+        $this->assertNull($em->getRepository(AddressBook::class)->findOneBy(['uri' => str_repeat('a', 256)]));
+    }
+
+    /**
+     * The field is mapped, so `handleRequest()` writes it onto the entity and the flush persists
+     * it, both ways round.
+     */
+    public function testTheBirthdayCalendarFlagIsSaved(): void
+    {
+        $client = static::createClient();
+        $client->loginUser(new AdminUser('admin', 'test'));
+
+        $userId = $this->getUserId($client, 'test_user');
+        $em = static::getContainer()->get('doctrine.orm.entity_manager');
+
+        foreach ([true, false] as $included) {
+            $book = $em->getRepository(AddressBook::class)->findOneBy([
+                'principalUri' => Principal::PREFIX.'test_user',
+                'uri' => 'default',
+            ]);
+
+            $crawler = $client->request('GET', '/addressbooks/'.$userId.'/edit/'.$book->getId());
+            $form = $crawler->selectButton('address_book_save')->form();
+
+            $client->submit($form, [
+                'address_book[uri]' => 'default',
+                'address_book[displayName]' => 'Default',
+                'address_book[includedInBirthdayCalendar]' => $included ? 1 : 0,
+            ]);
+            $this->assertResponseRedirects('/addressbooks/'.$userId);
+
+            $em = static::getContainer()->get('doctrine.orm.entity_manager');
+            $reloaded = $em->getRepository(AddressBook::class)->findOneBy([
+                'principalUri' => Principal::PREFIX.'test_user',
+                'uri' => 'default',
+            ]);
+            $this->assertSame($included, $reloaded->isIncludedInBirthdayCalendar());
+        }
+    }
+
     public function testAddressBookDelete(): void
     {
         $user = new AdminUser('admin', 'test');
@@ -107,11 +174,112 @@ class AddressBookControllerTest extends WebTestCase
         $addressbookRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(AddressBook::class);
         $addressbook = $addressbookRepository->findOneByDisplayName('default.addressbook.title');
 
-        $client->request('GET', '/addressbooks/'.$userId.'/delete/'.$addressbook->getId());
+        $this->postAdmin($client, '/addressbooks/'.$userId.'/delete/'.$addressbook->getId());
 
         $this->assertResponseRedirects('/addressbooks/'.$userId);
         $client->followRedirect();
 
         $this->assertSelectorTextNotContains('h5', 'default.addressbook.title');
+    }
+
+    public function testAddressBookDeleteRejectsGetAndInvalidCsrfToken(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        $addressbookRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(AddressBook::class);
+        $addressbook = $addressbookRepository->findOneByDisplayName('default.addressbook.title');
+
+        $client->request('GET', '/addressbooks/'.$userId.'/delete/'.$addressbook->getId());
+        $this->assertResponseStatusCodeSame(405);
+
+        $client->request('POST', '/addressbooks/'.$userId.'/delete/'.$addressbook->getId(), ['_token' => 'not-the-token']);
+        $this->assertResponseStatusCodeSame(403);
+
+        $this->assertNotNull($addressbookRepository->find($addressbook->getId()));
+    }
+
+    public function testAddressBookActionsOnAnotherUsersBookAre404(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $otherId = $this->getUserId($client, 'test_user2');
+
+        $addressbookRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(AddressBook::class);
+        $addressbook = $addressbookRepository->findOneByDisplayName('default.addressbook.title');
+
+        $client->request('GET', '/addressbooks/'.$otherId.'/edit/'.$addressbook->getId());
+        $this->assertResponseStatusCodeSame(404);
+
+        $this->postAdmin($client, '/addressbooks/'.$otherId.'/delete/'.$addressbook->getId());
+        $this->assertResponseStatusCodeSame(404);
+
+        $this->assertNotNull($addressbookRepository->find($addressbook->getId()));
+    }
+
+    public function testAddressBookNewIgnoresASubmittedOwner(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        $crawler = $client->request('GET', '/addressbooks/'.$userId.'/new');
+        $this->assertSelectorNotExists('input[name="address_book[principalUri]"]');
+
+        $form = $crawler->selectButton('address_book_save')->form();
+        $values = $form->getPhpValues();
+        $values['address_book']['uri'] = 'hijack';
+        $values['address_book']['displayName'] = 'Hijack';
+        $values['address_book']['principalUri'] = 'principals/test_user2';
+
+        $client->request($form->getMethod(), $form->getUri(), $values);
+
+        $this->assertResponseIsSuccessful();
+        $addressbookRepository = static::getContainer()->get('doctrine.orm.entity_manager')->getRepository(AddressBook::class);
+        $this->assertNull($addressbookRepository->findOneBy(['uri' => 'hijack']));
+    }
+
+    public function testAddressBookWithoutADisplayNameFallsBackToItsUri(): void
+    {
+        $user = new AdminUser('admin', 'test');
+
+        $client = static::createClient();
+        $client->loginUser($user);
+
+        $userId = $this->getUserId($client, 'test_user');
+
+        $em = static::getContainer()->get('doctrine.orm.entity_manager');
+        $nameless = (new AddressBook())
+            ->setPrincipalUri('principals/test_user')
+            ->setUri('nameless-book')
+            ->setDisplayName(null);
+        $em->persist($nameless);
+        $em->flush();
+
+        $client->request('GET', '/addressbooks/'.$userId);
+
+        $this->assertResponseIsSuccessful();
+        $this->assertAnySelectorTextContains('h5', 'nameless-book');
+    }
+
+    public function testAddressBookPagesAreNotReachableAnonymously(): void
+    {
+        $client = static::createClient();
+
+        foreach (['/addressbooks/1', '/addressbooks/1/new', '/addressbooks/1/edit/1'] as $url) {
+            $client->request('GET', $url);
+
+            $this->assertResponseRedirects('/login', null, $url.' must not be public');
+        }
     }
 }

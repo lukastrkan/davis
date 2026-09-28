@@ -4,11 +4,10 @@ namespace App\Services;
 
 use App\Entity\User;
 use Doctrine\Persistence\ManagerRegistry;
-use Sabre\DAV\Auth\Backend\AbstractBasic;
 use Webklex\PHPIMAP\Client;
 use Webklex\PHPIMAP\ClientManager;
 
-final class IMAPAuth extends AbstractBasic
+final class IMAPAuth extends AbstractAuth
 {
     /**
      * Doctrine registry.
@@ -62,23 +61,26 @@ final class IMAPAuth extends AbstractBasic
 
     public function __construct(ManagerRegistry $doctrine, Utils $utils, string $IMAPAuthUrl, bool $autoCreate, string $IMAPEncryptionMethod, bool $IMAPCertificateValidation)
     {
-        $components = parse_url($IMAPAuthUrl);
+        // `.env` shipped `IMAP_AUTH_URL=null` as a placeholder, and a dotenv file has no null
+        // literal, so it arrives as the four-letter string. Left alone it would be taken for a
+        // hostname and every login would fail on name resolution instead of saying it is unset.
+        if ('null' === strtolower(trim($IMAPAuthUrl))) {
+            $IMAPAuthUrl = '';
+        }
 
-        if (!$components) {
-            throw new Exception('IMAP Error (parsing IMAP url "'.$IMAPAuthUrl.'"): '.$e->getMessage());
+        // IMAP_AUTH_URL is documented as `host:port`, but parse_url() only reads a host when the
+        // value looks like an authority: a bare `imap.example.com` lands in `path` instead. The
+        // value is reduced to that authority — leading slashes off, scheme off — and then given
+        // the `//` that makes parse_url read it as a host. The scheme carries no meaning here
+        // anyway: encryption comes from IMAP_ENCRYPTION_METHOD.
+        $authority = preg_replace('~^[a-z][a-z0-9+.-]*://~i', '', ltrim($IMAPAuthUrl, '/'));
+        $components = '' === $IMAPAuthUrl ? [] : parse_url('//'.$authority);
+
+        if (false === $components) {
+            throw new \RuntimeException('IMAP_AUTH_URL could not be parsed: "'.$IMAPAuthUrl.'". Expected something like "imap.example.com:993".');
         }
 
         $this->IMAPHost = $components['host'] ?? null;
-
-        // Trying to choose the best port if it was not provided,
-        // defaulting to 993 (secure)
-        if (isset($components['port'])) {
-            $this->IMAPPort = $components['port'];
-        } elseif (false === $this->IMAPEncryptionMethod) {
-            $this->IMAPPort = 143;
-        } else {
-            $this->IMAPPort = 993;
-        }
 
         // We're making sure that only ssl, tls or 'false' are passed down to the IMAP client,
         // defaulting to SSL
@@ -90,6 +92,17 @@ final class IMAPAuth extends AbstractBasic
         } else {
             $this->IMAPEncryptionMethod = 'ssl';
         }
+
+        // Trying to choose the best port if it was not provided,
+        // defaulting to 993 (secure)
+        if (isset($components['port'])) {
+            $this->IMAPPort = $components['port'];
+        } elseif (false === $this->IMAPEncryptionMethod) {
+            $this->IMAPPort = 143;
+        } else {
+            $this->IMAPPort = 993;
+        }
+
         $this->IMAPCertificateValidation = $IMAPCertificateValidation;
 
         $this->autoCreate = $autoCreate;
@@ -104,6 +117,14 @@ final class IMAPAuth extends AbstractBasic
      */
     protected function imapOpen(string $username, string $password): bool
     {
+        // Reported here rather than from the constructor: this backend is a constructor argument of
+        // the DAV controller, so it is built on every request even when AUTH_METHOD is not IMAP.
+        if (!$this->IMAPHost) {
+            error_log('IMAP Error (configuration): IMAP_AUTH_URL has no host, expected something like "imap.example.com:993".');
+
+            return false;
+        }
+
         $cm = new ClientManager($options = []);
 
         // Create a new instance of the IMAP client manually
@@ -131,15 +152,17 @@ final class IMAPAuth extends AbstractBasic
             $user = $this->doctrine->getRepository(User::class)->findOneBy(['username' => $username]);
 
             if (!$user) {
-                // We only have a username, so we use it for displayname and email
-                $this->utils->createPasswordlessUserWithDefaultObjects($username, $username, $username);
-
-                $em = $this->doctrine->getManager();
-
                 try {
-                    $em->flush();
-                } catch (\Exception $e) {
-                    error_log('IMAP Error (flush): '.$e->getMessage());
+                    // We only have a username, so we use it for displayname and email
+                    $this->utils->createPasswordlessUserWithDefaultObjects($username, $username, $username);
+                    $this->doctrine->getManager()->flush();
+                } catch (\Throwable $e) {
+                    // Letting the login through without a principal would leave the account
+                    // authenticated but unusable: no calendar home, so clients fall back to the
+                    // server root and every write is refused.
+                    error_log('IMAP Error (could not create the user "'.$username.'"): '.$e->getMessage());
+
+                    return false;
                 }
             }
         }
@@ -150,7 +173,7 @@ final class IMAPAuth extends AbstractBasic
     /**
      * Validates a username and password by trying to authenticate against IMAP.
      */
-    protected function validateUserPass($username, $password): bool
+    protected function checkCredentials(string $username, string $password): bool
     {
         return $this->imapOpen($username, $password);
     }

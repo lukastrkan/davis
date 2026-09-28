@@ -49,8 +49,20 @@ final class Utils
         return md5($username.':'.$this->authRealm.':'.$password);
     }
 
+    /**
+     * A username is only acceptable if it can be used verbatim in a principal URI.
+     */
+    public static function isValidUsername(?string $username): bool
+    {
+        return null !== $username && '' !== $username && 1 === preg_match(User::USERNAME_PATTERN, $username);
+    }
+
     public function createPasswordlessUserWithDefaultObjects(string $username, string $displayName, string $email)
     {
+        if (!self::isValidUsername($username)) {
+            throw new \InvalidArgumentException(sprintf('Refusing to create the user "%s": a username may only contain letters, digits and the characters _ . @ + \' -', $username));
+        }
+
         $user = new User();
         $user->setUsername($username);
 
@@ -61,14 +73,14 @@ final class Utils
 
         // Create principal, default calendar and addressbook
         $principal = new Principal();
-        $principal->setUri(Principal::PREFIX.$username)
+        $principal->setUri($user->getPrincipalUri())
                 ->setDisplayName($displayName)
                 ->setEmail($email)
                 ->setIsAdmin(false);
 
         $calendarInstance = new CalendarInstance();
         $calendar = new Calendar();
-        $calendarInstance->setPrincipalUri(Principal::PREFIX.$username)
+        $calendarInstance->setPrincipalUri($user->getPrincipalUri())
                 ->setUri('default') // No risk of collision since unicity is guaranteed by the new user principal
                 ->setDisplayName($this->trans->trans('default.calendar.title'))
                 ->setDescription($this->trans->trans('default.calendar.description', ['user' => $displayName]))
@@ -84,7 +96,7 @@ final class Utils
                         ->setIsMain(false);
 
         $addressbook = new AddressBook();
-        $addressbook->setPrincipalUri(Principal::PREFIX.$username)
+        $addressbook->setPrincipalUri($user->getPrincipalUri())
                 ->setUri('default') // No risk of collision since unicity is guaranteed by the new user principal
                 ->setDisplayName($this->trans->trans('default.addressbook.title'))
                 ->setDescription($this->trans->trans('default.addressbook.description', ['user' => $displayName]));
