@@ -1,46 +1,48 @@
-Calendar notification from {{ senderName }}.
+{% set czech_months = ['ledna', 'února', 'března', 'dubna', 'května', 'června', 'července', 'srpna', 'září', 'října', 'listopadu', 'prosince'] %}
+{% set czech_days = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'] %}
+Kalendářní oznámení od {{ senderName }}.
 
 -----------------------------------------------------------
 
 {% if action == 'REQUEST' %}
 
-**{{ senderName }}** invited you to “{{ summary }}”.
+**{{ senderName }}** vás pozval/a na “{{ summary }}”.
 
 {% elseif action == 'CANCEL' %}
 
-“{{ summary }}” has been canceled.
+“{{ summary }}” bylo zrušeno.
 
 {% elseif action == 'ACCEPTED' %}
 
-**{{ senderName }}** accepted your invitation to “{{ summary }}”.
+**{{ senderName }}** přijal/a vaše pozvání na “{{ summary }}”.
 
 {% elseif action == 'TENTATIVE' %}
 
-**{{ senderName }}** tentatively accepted your invitation to “{{ summary }}”.
+**{{ senderName }}** předběžně přijal/a vaše pozvání na “{{ summary }}”.
 
 {% elseif action == 'DECLINED' %}
 
-**{{ senderName }}** declined your invitation to “{{ summary }}”.
+**{{ senderName }}** odmítl/a vaše pozvání na “{{ summary }}”.
 
 {% endif %}
 
 -----------------------------------------------------------
 
-When?         {{ dateTime|date('l, F jS Y') }}
+Kdy?          {{ czech_days[dateTime|date('w')] }}, {{ dateTime|date('j') }}. {{ czech_months[dateTime|date('n') - 1] }} {{ dateTime|date('Y') }}
 {% if not allDay %}
               {{ dateTime|date('g:ia T') }}
 {% endif %}
 
 {% if action != 'CANCEL' %}
-Attendees:
+Účastníci:
 {% for attendee in attendees %}
-              {{ attendee.cn }} <{{ attendee.email }}> {% if attendee.role == 'CHAIR' %}(organizer){% endif %}
+              {{ attendee.email }} {% if attendee.role == 'CHAIR' %}(organizátor){% endif %}
 {% endfor %}
 {% endif %}
 
 
 {% if location %}
-Where?        {{ location|replace({"\n": "\n" ~ '              '}) }}
+Kde?          {{ location|replace({"\n": "\n" ~ '              '}) }}
 {% endif %}
 
 {% if url %}
@@ -49,9 +51,9 @@ URL:          {{ url }}
 
 
 {% if description %}
-Notes:        {{ description|replace({"\n": "\n" ~ '              '}) }}
+Poznámky:     {{ description|replace({"\n": "\n" ~ '              '}) }}
 {% endif %}
 
 -----------------------------------------------------------
 
-Mail sent by {{ app.request.getSchemeAndHttpHost() }}
+E-mail odeslán přes {{ app.request.getSchemeAndHttpHost() }}

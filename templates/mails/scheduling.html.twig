@@ -1,9 +1,11 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Calendar notification from {{ senderName }}</title>
+  <title>Kalendářní oznámení od {{ senderName }}</title>
   <meta http-equiv="content-type" content="text/html; charset=utf-8" />
 </head>
+{% set czech_months = ['ledna', 'února', 'března', 'dubna', 'května', 'června', 'července', 'srpna', 'září', 'října', 'listopadu', 'prosince'] %}
+{% set czech_days = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'] %}
 <body leftmargin="0" marginwidth="0" topmargin="0" marginheight="0" offset="0" style="margin: 0; padding: 0; background: #fff; color: #111111; font-family: Arial, sans-serif; font-size: 14px; line-height: 20px;">
 <table cellspacing="0" cellpadding="0" width="100%">
   <thead>
@@ -17,8 +19,8 @@
           <tr>
             <td width="1" style="font-size: 64px; font-weight:bold;">{{ dateTime|date('j') }}</td>
             <td width="*" style="padding: 10px 0;">
-              <span style=" font-size: 12px; color: #555555">{{ dateTime|date('l') }}</span><br />
-              {{ dateTime|date('F') }}
+              <span style=" font-size: 12px; color: #555555">{{ czech_days[dateTime|date('w')] }}</span><br />
+              {{ czech_months[dateTime|date('n') - 1] }}
             </td>
             <td width="58" style="text-align: right;">
             </td>
@@ -39,18 +41,18 @@
       <td> </td>
       <td style="text-align: center; padding: 10px 0;">
         {% if action == 'REQUEST' %}
-          <strong>{{ senderName }}</strong> invited you to
+          <strong>{{ senderName }}</strong> vás pozval/a na
           <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1>
         {% elseif action == 'CANCEL' %}
-          <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1> has been canceled.
+          <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1> bylo zrušeno.
         {% elseif action == 'ACCEPTED' %}
-          <strong>{{ senderName }}</strong> accepted your invitation to
+          <strong>{{ senderName }}</strong> přijal/a vaše pozvání na
           <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1>
         {% elseif action == 'TENTATIVE' %}
-          <strong>{{ senderName }}</strong> tentatively accepted your invitation to
+          <strong>{{ senderName }}</strong> předběžně přijal/a vaše pozvání na
           <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1>
         {% elseif action == 'DECLINED' %}
-          <strong>{{ senderName }}</strong> declined your invitation to
+          <strong>{{ senderName }}</strong> odmítl/a vaše pozvání na
           <h1 style="margin: 0; color: #2c7ea9; font-weight: 300; line-height: 36px;">{{ summary }}</h1>
         {% endif %}
       </td>
@@ -69,9 +71,9 @@
       <td>
         <table border="0" cellpadding="0" cellspacing="10" width="100%">
           <tr>
-            <td style="vertical-align: bottom; color: #777777;" width="100px">When?</td>
+            <td style="vertical-align: bottom; color: #777777;" width="100px">Kdy?</td>
             <td>
-              <strong>{{ dateTime|date("l, F j\\<\\s\\u\\p\\>S\\<\\/\\s\\u\\p\\> Y")|raw }}</strong>
+              <strong>{{ czech_days[dateTime|date('w')] }}, {{ dateTime|date('j') }}. {{ czech_months[dateTime|date('n') - 1] }} {{ dateTime|date('Y') }}</strong>
             </td>
           </tr>
           {% if not allDay %}
@@ -82,25 +84,25 @@
           {% endif %}
           {% if action != 'CANCEL' %}
             <tr>
-              <td style="vertical-align: top; color: #777777;" width="100px">Attendees:</td>
+              <td style="vertical-align: top; color: #777777;" width="100px">Účastníci:</td>
               <td>
               {% for attendee in attendees %}
-                <a href="mailto:{{ attendee.email }}" style="color: #2c7ea9">{{ attendee.cn }}</a>
-                {% if attendee.role == 'CHAIR' %}(organizer){% endif %}
+                <a href="mailto:{{ attendee.email }}" style="color: #2c7ea9">{{ attendee.email }}</a>
+                {% if attendee.role == 'CHAIR' %}(organizátor){% endif %}
                 <br />
               {% endfor %}
             </tr>
           {% endif %}
           {% if location %}
           <tr>
-            <td style="vertical-align: top; color: #777777;" width="100px">Where?</td>
+            <td style="vertical-align: top; color: #777777;" width="100px">Kde?</td>
             <td>{{ location }}</td>
           </tr>
           {% endif %}
           {% if locationImageDataAsBase64 %}
           <tr>
             <td colspan="2">
-                <a href="{{ locationLink }}" title="Navigate on this map">
+                <a href="{{ locationLink }}" title="Navigovat na mapě">
                   <img src="data:image/png;base64,{{ locationImageDataAsBase64 }}" width="100%"/>
                 </a>
             </td>
@@ -116,7 +118,7 @@
           {% endif %}
           {% if description %}
           <tr>
-            <td style="vertical-align: top; color: #777777;" width="100px">Notes:</td>
+            <td style="vertical-align: top; color: #777777;" width="100px">Poznámky:</td>
             <td>{{ description }}</td>
           </tr>
           {% endif %}
@@ -139,7 +141,7 @@
     <tr>
       <td> </td>
       <td style="font-size: 11px; line-height: 16px; text-align: center; color: #dddddd;">
-        Mail sent by {{ app.request.getSchemeAndHttpHost() }}
+        E-mail odeslán z {{ app.request.getSchemeAndHttpHost() }}
       </td>
       <td> </td>
     </tr>

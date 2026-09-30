@@ -16,3 +16,7 @@ var/log/*
 var/*.db
 var/webdav
 var/tmp
+.bugsink-token
+.idea
+docker/.env
+*.ics

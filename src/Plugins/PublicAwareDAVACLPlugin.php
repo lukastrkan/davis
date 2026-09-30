@@ -4,6 +4,7 @@ namespace App\Plugins;
 
 use App\Entity\CalendarInstance;
 use Doctrine\ORM\EntityManagerInterface;
+use Sabre\DAVACL\IPrincipalCollection;
 use Sabre\HTTP\RequestInterface;
 use Sabre\HTTP\ResponseInterface;
 
@@ -46,6 +47,37 @@ class PublicAwareDAVACLPlugin extends \Sabre\DAVACL\Plugin
         }
 
         return parent::beforeMethod($request, $response);
+    }
+
+    /**
+     * Overrides the parent to guard against hideNodesFromListings = true causing
+     * getPropertiesForPath() to return [] for principals the requesting user cannot
+     * read, which makes list($matches[]) = [] trigger "Undefined array key 0".
+     */
+    public function principalSearch(array $searchProperties, array $requestedProperties, $collectionUri = null, $test = 'allof')
+    {
+        $uris = !is_null($collectionUri) ? [$collectionUri] : $this->principalCollectionSet;
+
+        $lookupResults = [];
+        foreach ($uris as $uri) {
+            $principalCollection = $this->server->tree->getNodeForPath($uri);
+            if (!$principalCollection instanceof IPrincipalCollection) {
+                continue;
+            }
+            foreach ($principalCollection->searchPrincipals($searchProperties, $test) as $result) {
+                $lookupResults[] = rtrim($uri, '/').'/'.$result;
+            }
+        }
+
+        $matches = [];
+        foreach ($lookupResults as $lookupResult) {
+            $props = $this->server->getPropertiesForPath($lookupResult, $requestedProperties, 0);
+            if (!empty($props)) {
+                $matches[] = $props[0];
+            }
+        }
+
+        return $matches;
     }
 
     public function getAcl($node): array

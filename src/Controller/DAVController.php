@@ -245,7 +245,7 @@ class DAVController extends AbstractController
         }
 
         if ($this->calDAVEnabled) {
-            $calendarBackend = new \Sabre\CalDAV\Backend\PDO($pdo);
+            $calendarBackend = new \App\CalDAV\Backend\PDO($pdo, $this->logger);
             $nodes[] = new \Sabre\CalDAV\CalendarRoot($principalBackend, $calendarBackend);
         }
         if ($this->cardDAVEnabled) {
@@ -305,7 +305,7 @@ class DAVController extends AbstractController
         if ($this->calDAVEnabled) {
             $this->server->addPlugin(new \Sabre\DAV\Sharing\Plugin());
             $this->server->addPlugin(new \Sabre\CalDAV\Plugin());
-            $this->server->addPlugin(new \Sabre\CalDAV\Schedule\Plugin());
+            $this->server->addPlugin(new \App\CalDAV\Schedule\Plugin());
             $this->server->addPlugin(new \Sabre\CalDAV\SharingPlugin());
             $this->server->addPlugin(new \Sabre\CalDAV\ICSExportPlugin());
             $this->server->addPlugin(new \Sabre\CalDAV\Subscriptions\Plugin());
@@ -388,7 +388,17 @@ class DAVController extends AbstractController
             }
 
             $httpCode = ($e instanceof \Sabre\DAV\Exception) ? $e->getHTTPCode() : 500;
-            $this->logger->error('['.$httpCode.']: '.get_class($e).' - '.$e->getMessage(), $e->getTrace());
+            $message = '['.$httpCode.']: '.get_class($e).' - '.$e->getMessage();
+
+            // 4xx are client-side/routing noise (missing resource, method not allowed, ...),
+            // not application errors: keep them out of the error channel (and Sentry).
+            if ($httpCode >= 400 && $httpCode < 500) {
+                $this->logger->warning($message, ['exception' => $e]);
+
+                return;
+            }
+
+            $this->logger->error($message, ['exception' => $e]);
         });
     }
 

@@ -98,6 +98,11 @@ services:
         tags:
             - { name: monolog.processor }
 
+    Sentry\Monolog\ExceptionToSentryIssueHandler:
+        arguments:
+            $hub: '@Sentry\State\HubInterface'
+            $level: !php/const Monolog\Level::Error
+
     App\Services\BirthdayService:
         arguments:
             $birthdayReminderOffset: "%birthday_reminder_offset%"

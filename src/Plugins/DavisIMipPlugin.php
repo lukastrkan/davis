@@ -103,7 +103,7 @@ final class DavisIMipPlugin extends SabreBaseIMipPlugin
             }
         }
 
-        $subject = 'CalDAV message';
+        $subject = 'Zpráva CalDAV';
         // Anything other than the three methods below leaves the template without an action to
         // render, so the message is not one this plugin knows how to word.
         $action = null;
@@ -114,15 +114,15 @@ final class DavisIMipPlugin extends SabreBaseIMipPlugin
                 $partstat = (string) $itip->message->VEVENT->ATTENDEE['PARTSTAT'];
                 switch (strtoupper($partstat)) {
                     case 'DECLINED':
-                        $subject = $senderName.' declined your invitation to "'.$summary.'"';
+                        $subject = $senderName.' odmítl/a vaše pozvání na "'.$summary.'"';
                         $action = 'DECLINED';
                         break;
                     case 'ACCEPTED':
-                        $subject = $senderName.' accepted your invitation to "'.$summary.'"';
+                        $subject = $senderName.' přijal/a vaše pozvání na "'.$summary.'"';
                         $action = 'ACCEPTED';
                         break;
                     case 'TENTATIVE':
-                        $subject = $senderName.' tentatively accepted your invitation to "'.$summary.'"';
+                        $subject = $senderName.' předběžně přijal/a vaše pozvání na "'.$summary.'"';
                         $action = 'TENTATIVE';
                         break;
                     default:
@@ -134,11 +134,11 @@ final class DavisIMipPlugin extends SabreBaseIMipPlugin
 
                 break;
             case 'REQUEST':
-                $subject = $senderName.' invited you to "'.$summary.'"';
+                $subject = $senderName.' vás pozval/a na "'.$summary.'"';
                 $action = 'REQUEST';
                 break;
             case 'CANCEL':
-                $subject = '"'.$summary.'" has been canceled.';
+                $subject = '"'.$summary.'" bylo zrušeno.';
                 $action = 'CANCEL';
                 break;
             default:
@@ -163,17 +163,20 @@ final class DavisIMipPlugin extends SabreBaseIMipPlugin
             $_attendees = &$itip->message->VEVENT->ATTENDEE;
             for ($i = 0, $max = count($_attendees); $i < $max; ++$i) {
                 $attendee = $_attendees[$i];
-                $attendees[] = [
-                    'cn' => isset($attendee['CN'])
-                            ? (string) $attendee['CN']
-                            : (string) $attendee['EMAIL'],
-                    'email' => isset($attendee['EMAIL'])
-                            ? (string) $attendee['EMAIL']
-                            : null,
-                    'role' => isset($attendee['ROLE'])
-                            ? (string) $attendee['ROLE']
-                            : null,
-                ];
+                try {
+                    $attendeeValue = (string) $attendee;
+                    if ('mailto:' !== substr($attendeeValue, 0, 7)) {
+                        continue;
+                    }
+                    $attendees[] = [
+                        'email' => substr($attendeeValue, 7),
+                        'role' => isset($attendee['ROLE'])
+                                ? (string) $attendee['ROLE']
+                                : null,
+                    ];
+                } catch (\Throwable $e) {
+                    \Sentry\captureException($e);
+                }
             }
             usort($attendees, function ($a, $b) {
                 if ('CHAIR' === $a['role']) {

@@ -20,3 +20,12 @@
 .DS_Store
 TODO.todo
 webdav_*
+
+# Local dev (not for git)
+/davis
+/scripts/
+/var/dumps/
+/docker/docker-compose-local.yml
+/docker/Dockerfile-local
+/docker/init-db/
+/.bugsink-token
