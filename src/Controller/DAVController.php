@@ -417,6 +417,9 @@ class DAVController extends AbstractController
     }
 
     #[Route('/dav/{path}', name: 'dav', requirements: ['path' => '.*'])]
+    // `/dav` without the trailing slash is not matched by `/dav/{path}`; sabre maps it to the root itself.
+    // It must come after `dav`, otherwise the router redirects `/dav/` to it.
+    #[Route('/dav', name: 'dav-root')]
     #[Route('/dav.php/{path}', name: 'dav-old', requirements: ['path' => '.*'])]
     public function dav(Request $request, ?string $path, ?Profiler $profiler = null)
     {

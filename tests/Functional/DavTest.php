@@ -240,6 +240,40 @@ class DavTest extends WebTestCase
         }
     }
 
+    public function testDavRootWithoutTrailingSlashIsServed(): void
+    {
+        $client = static::createClient();
+
+        static::requestDav($client, 'PROPFIND', '/dav', 'test_user:password');
+
+        $this->assertResponseStatusCodeSame(207);
+    }
+
+    /**
+     * Sabre parses calendar-timezone as a VCALENDAR wherever it reads it (free-busy,
+     * calendar-query, multiget), so a client-stored bare TZID must not reach it.
+     */
+    public function testAnUnparseableCalendarTimezoneIsDropped(): void
+    {
+        $client = static::createClient();
+
+        /** @var EntityManagerInterface $em */
+        $em = static::getContainer()->get('doctrine.orm.entity_manager');
+        $instance = $em->getRepository(CalendarInstance::class)->findOneBy([
+            'principalUri' => Principal::PREFIX.'test_user',
+            'uri' => 'default',
+        ]);
+        $instance->setTimezone('Europe/Prague');
+        $em->flush();
+
+        $_SERVER['HTTP_DEPTH'] = '0';
+        static::requestDav($client, 'PROPFIND', '/dav/calendars/test_user/default/', 'test_user:password');
+        unset($_SERVER['HTTP_DEPTH']);
+
+        $this->assertResponseStatusCodeSame(207);
+        $this->assertStringNotContainsString('Europe/Prague', (string) $client->getResponse()->getContent());
+    }
+
     /**
      * The advertised methods depend on the node: MKCALENDAR only exists inside a calendar home,
      * so OPTIONS has to answer for the path it was asked about rather than for the root.

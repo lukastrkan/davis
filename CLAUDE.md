@@ -53,7 +53,8 @@ docker buildx build --platform linux/amd64 -f docker/Dockerfile-standalone -t gi
 
 Keep track of these when merging upstream:
 - Sentry error reporting (`sentry/sentry-symfony`, `config/packages/sentry.yaml`, monolog handler in `config/services.yaml` + `config/packages/prod/monolog.yaml`); DAV 4xx exceptions are logged as warnings so they stay out of Sentry.
-- `App\CalDAV\Backend\PDO`: stores events whose RRULE yields no instances instead of failing with a 500.
+- `App\CalDAV\Backend\PDO`: stores events whose RRULE yields no instances instead of failing with a 500; `getCalendarsForUser()` drops a `calendar-timezone` that isn't a VCALENDAR (sabre would throw ParseException on free-busy/calendar-query).
+- `DAVController::dav()` also answers `/dav` without trailing slash (`dav-root` route, declared after `dav`).
 - `App\CalDAV\Schedule\Plugin` + `Broker`: organizer alarms (VALARM) are stripped from iTIP messages, and an attendee's own alarms survive organizer updates.
 - `PublicAwareDAVACLPlugin::principalSearch()` override (guards against empty results with `hideNodesFromListings`).
 - iMIP email subjects and templates are in Czech (upstream tests in `tests/Functional/Plugins/ImipPluginTest.php` expect English).

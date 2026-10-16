@@ -21,6 +21,26 @@ class PDO extends SabrePDO
         parent::__construct($pdo);
     }
 
+    /**
+     * Sabre stores whatever a client sends as calendar-timezone (MKCALENDAR / PROPPATCH),
+     * but parses it as a VCALENDAR everywhere it reads it back (free-busy, calendar-query,
+     * multiget), so a bare TZID or an empty string breaks those requests with a ParseException.
+     * Such a value is dropped here: the calendar then behaves as if it had no timezone (UTC).
+     */
+    public function getCalendarsForUser($principalUri)
+    {
+        $tzProp = '{'.\Sabre\CalDAV\Plugin::NS_CALDAV.'}calendar-timezone';
+        $calendars = parent::getCalendarsForUser($principalUri);
+
+        foreach ($calendars as &$calendar) {
+            if (isset($calendar[$tzProp]) && !str_starts_with(ltrim($calendar[$tzProp]), 'BEGIN:VCALENDAR')) {
+                unset($calendar[$tzProp]);
+            }
+        }
+
+        return $calendars;
+    }
+
     protected function getDenormalizedData($calendarData)
     {
         $vObject = VObject\Reader::read($calendarData);
