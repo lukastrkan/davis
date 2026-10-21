@@ -58,4 +58,5 @@ Keep track of these when merging upstream:
 - `App\CalDAV\Schedule\Plugin` + `Broker`: organizer alarms (VALARM) are stripped from iTIP messages, and an attendee's own alarms survive organizer updates.
 - `PublicAwareDAVACLPlugin::principalSearch()` override (guards against empty results with `hideNodesFromListings`).
 - iMIP email subjects and templates are in Czech (upstream tests in `tests/Functional/Plugins/ImipPluginTest.php` expect English).
+- Both Dockerfiles pin `php:8.4.27-fpm-alpine` (security release for CVE-2026-109618/109619) and set `session.upload_progress.enabled = Off`; go back to `php:8.4-fpm-alpine` once upstream's base image is past 8.4.27.
 - `docker/.env` holds real deployment credentials: do not commit it.

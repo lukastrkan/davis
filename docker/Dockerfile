@@ -5,7 +5,7 @@
 ARG fpm_user=82:82
 
 # Base image, used to build extensions and the final image ———————————————————————
-FROM php:8.4-fpm-alpine AS base-image
+FROM php:8.4.27-fpm-alpine AS base-image
 
 # Run update, and gets basic packages and packages for runtime
 RUN apk --no-progress --update add --no-cache \
@@ -22,6 +22,9 @@ RUN apk --no-progress --update add --no-cache \
         libpng \
         # This is for PostgreSQL
         libpq
+
+# Defense in depth for the session.upload_progress use-after-free ("php2shell", fixed in 8.4.27); Davis doesn't use upload progress
+RUN echo 'session.upload_progress.enabled = Off' > /usr/local/etc/php/conf.d/zz-session-upload-progress.ini
 
 # Build all extensions in a separate image ———————————————————————————————————————
 FROM base-image AS extension-builder
