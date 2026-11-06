@@ -84,6 +84,15 @@ Dependencies
 
    And set `APP_ENV=prod` in your `.env.local` file (see below)
 
+2. Generate a unique `APP_SECRET` and set it in your `.env.local` file (or as a real environment variable, see below):
+
+    ```
+    openssl rand -hex 16
+    ```
+
+    > [!CAUTION]
+    >
+    > The `.env` file committed in this repository ships a default `APP_SECRET`. It is the same for every installation, so you **must** override it. This value is not used to encrypt any data: you can change it at any time without losing anything.
 
 3. At least put the correct credentials to your database (driver and url) in your `.env.local` file so you can easily create the necessary tables.
 
@@ -109,7 +118,7 @@ Create your own `.env.local` file to change the necessary variables, if you plan
 
 > [!CAUTION]
 >
-> In a production environnement, the `APP_ENV` variable MUST be set to `prod` to prevent leaking sensitive data.
+> In a production environnement, the `APP_ENV` variable MUST be set to `prod` to prevent leaking sensitive data, and `APP_SECRET` MUST be set to a unique value (see the installation steps above).
 
 **a. The database driver and url** (_you should already have it configured since you created the database previously_)
 
@@ -136,6 +145,51 @@ AUTH_REALM=SabreDAV
 AUTH_METHOD=Basic # can be "Basic", "IMAP" or "LDAP"
 ```
 > See [the following paragraph](#specific-environment-variables-for-imap-and-ldap-authentication-methods) for more information if you choose either IMAP or LDAP.
+
+> [!WARNING]
+>
+> **Do not change `AUTH_REALM` on an existing installation.** Davis stored passwords as
+> `md5(username:AUTH_REALM:password)` until v1.10.0 (September 2021), and a database imported from
+> Baïkal uses the same scheme. The realm is part of those hashes, so changing it makes every one of
+> them stop working, with no error beyond a failed login — the accounts are still there, they simply
+> cannot authenticate any more.
+>
+> Passwords set since v1.10.0 use bcrypt and are unaffected. You can still be carrying legacy ones
+> without ever having used Baïkal, if the account predates that version. To find out:
+>
+> ```sql
+> SELECT username FROM users WHERE digesta1 NOT LIKE '$2y$%';
+> ```
+>
+> Any row returned is a legacy hash tied to the current realm.
+>
+> There is no password reset in Davis. If you must change the realm, the only way back is to open
+> each of those accounts in the dashboard and type a new password: the field is blank on the edit
+> page and leaving it blank keeps the current hash, so filling it in is what replaces it. The new
+> one is stored with bcrypt and no longer depends on the realm. Your own admin login is unaffected —
+> it comes from `ADMIN_LOGIN` / `ADMIN_PASSWORD`, not from the users table.
+
+**App keys**
+
+```shell
+APP_KEYS_ENABLED=false
+```
+
+App keys are off by default. To use them, set `APP_KEYS_ENABLED=true`. When they are off, the app keys page, the `davis:app-key:*` commands and the app key login are not available. Existing keys stay in the database and work again if you turn the setting back on.
+
+A service that already knows who the user is (a webmail behind SSO, a scheduling tool like cal.com) can read and write a user's calendars and address books without holding that user's password. An admin creates an app key from the dashboard (or with `bin/console davis:app-key:create`), scoped to some users or to all of them, and the service logs in over HTTP Basic as `<login>*<app_id>` with the key's secret as the password, Dovecot style. Davis then acts as `<login>`.
+
+You must say which users the key can act as. List their usernames (they must already exist in Davis), or use `*` for all users (`--all-users` on the command line). `*` does not include admins, because an admin can read every calendar and address book. To let a key act as an admin, add the admin's username to the list.
+
+When logged in as `alice`, the key has the same access as alice. This includes calendars that other users shared with her. If she is a delegate for another user, it also includes that user's calendars.
+
+When you delete a user from the dashboard, Davis removes them from the keys that list them. If a key was only for that user, the key is revoked. Keys with `*` are not changed. With IMAP or LDAP, removing someone from the directory does not delete their Davis account, so their keys keep working until you delete the account or revoke the keys.
+
+Davis records which users each key has acted as, with the first and last time. You can see this on the app keys page and with `davis:app-key:list`.
+
+It works with every `AUTH_METHOD` and never contacts the backend: a wrong secret is refused outright, and a username ending in `*<something that is not an app id>` is sent to the backend as is. The login must be an existing Davis account, with exactly the same username. An app key never creates an account, even with IMAP or LDAP and `*_AUTH_USER_AUTOCREATE`, because it never asks the IMAP or LDAP server if the user is real. The account must already exist.
+
+The secret is shown once at creation and stored hashed. Keep it on the server side, never in a browser, and revoke the key (dashboard, or `davis:app-key:revoke <app_id>`) when the service goes away; an expiry date can be set when the access is meant to be temporary. This is the use case of [#183](https://github.com/tchapi/davis/issues/183).
 
 **d. The global flags to enable CalDAV, CardDAV and WebDAV**. You can also disable the option to have calendars public
 
@@ -719,6 +773,28 @@ An update event might have been missed. In this case, it's easy to resync all co
 
 ```
 bin/console dav:sync-birthday-calendar
+```
+
+> [!WARNING]
+> This is a repair command, don't put it on a schedule. It deletes and recreates every birthday
+> event, so each run tells your clients that all of them changed and they download the lot again.
+> Birthdays are kept up to date on their own whenever a contact is added, changed or removed.
+
+### macOS Calendar shows "There was a problem accessing the availability for this account"
+
+macOS Calendar reads the user's availability (the hours they can be invited, RFC 7953) from the `calendar-availability` property of their scheduling inbox (`/dav/calendars/<user>/inbox/`) when the account settings are opened. Like any sabre/dav server (Baïkal behaves the same), Davis only stores that property once a client has written it, so for a new user it does not exist. Calendar treats a missing value as an error, whatever the server answers (a `404`, or the empty `418` propstat sabre/dav returns because Calendar asks for a minimal response), and never writes a default itself.
+
+Davis therefore answers with a default availability, **weekdays from 09:00 to 17:00**, until the user saves their own in Calendar. A few things to know:
+
+- The default is only shown to clients: free-busy lookups (when someone checks whether the user is free before inviting them) keep treating a user who never saved an availability as **always available**, as before. Once the user saves their availability, it applies everywhere.
+- The times are "floating": every client reads 09:00 to 17:00 in its own time zone.
+- Calendar asks for the property under its old Apple name (`{http://calendarserver.org/ns/}calendar-availability`), which sabre/dav maps to the standard one (`{urn:ietf:params:xml:ns:caldav}calendar-availability`): both names read and write the same value.
+
+To check what a user has, run a PROPFIND on their inbox (it returns the default if nothing is stored):
+
+```shell
+curl -u <user>:<password> -X PROPFIND -H 'Depth: 0' https://dav.example.org/dav/calendars/<user>/inbox/ \
+  --data '<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-availability/></d:prop></d:propfind>'
 ```
 
 # 📚 Libraries used

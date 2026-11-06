@@ -21,7 +21,9 @@ RUN apk --no-progress --update add --no-cache \
         libjpeg-turbo \
         libpng \
         # This is for PostgreSQL
-        libpq
+        libpq \
+        # Timezone data, so that the TZ env var is honoured
+        tzdata
 
 # Defense in depth for the session.upload_progress use-after-free ("php2shell", fixed in 8.4.27); Davis doesn't use upload progress
 RUN echo 'session.upload_progress.enabled = Off' > /usr/local/etc/php/conf.d/zz-session-upload-progress.ini

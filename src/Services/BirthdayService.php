@@ -232,10 +232,6 @@ class BirthdayService
 
         $leapDay = (2 === (int) $dateParts['month']
                 && 29 === (int) $dateParts['date']);
-        if (null === $dateParts['year'] || $originalYear < 1970) {
-            $birthday = ($leapDay ? '1972-' : '1970-')
-                .$dateParts['month'].'-'.$dateParts['date'];
-        }
 
         if ($leapDay) {
             /* Sabre\VObject supports BYMONTHDAY only if BYMONTH
@@ -304,7 +300,9 @@ class BirthdayService
             $cards = $this->doctrine->getRepository(Card::class)->findByAddressBook($book);
 
             foreach ($cards as $card) {
-                $this->onCardChanged($book->getId(), $card->getUri(), $card->getCardData());
+                // Not onCardChanged(): it would look the address book and the birthday calendar up
+                // again for every card, and we already have both.
+                $this->updateCalendar($card->getUri(), $card->getCardData(), $book, $calendarInstance);
             }
         }
     }

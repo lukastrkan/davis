@@ -38,6 +38,8 @@ final class Diagnostics
         private bool $webdavPublicDirWritable,
         private ?string $inviteAddress,
         private ?string $mailerDsn,
+        private bool $appKeysEnabled = false,
+        private string $adminAuthBypass = 'false',
     ) {
     }
 
@@ -60,6 +62,8 @@ final class Diagnostics
             ],
             'diagnostics.bucket.authentication' => [
                 $this->auth(),
+                $this->adminAuthBypass(),
+                $this->appKeys(),
                 $this->authExtension(),
             ],
             'diagnostics.bucket.scheduling' => [
@@ -238,14 +242,53 @@ final class Diagnostics
     }
 
     /**
-     * ext-ldap and ext-imap are optional for Davis, but the selected method cannot work without
-     * the one it needs, and that surfaces as every login being refused.
+     * With the bypass on, the dashboard trusts whoever reaches it, so it is only safe behind a
+     * proxy that authenticates first. The DAV server is not affected.
+     */
+    private function adminAuthBypass(): array
+    {
+        // Same strict comparison as the access rule in security.yaml
+        if ('true' === $this->adminAuthBypass) {
+            return $this->check(self::INFO, 'diagnostics.admin_auth_bypass', 'diagnostics.value.enabled', 'diagnostics.admin_auth_bypass.enabled');
+        }
+
+        // "True", "1" or "yes" read as an attempt to turn it on, but are ignored
+        if ('false' !== $this->adminAuthBypass) {
+            return $this->check(self::WARNING, 'diagnostics.admin_auth_bypass', $this->adminAuthBypass, 'diagnostics.admin_auth_bypass.invalid', 'ADMIN_AUTH_BYPASS=true');
+        }
+
+        return $this->check(self::OK, 'diagnostics.admin_auth_bypass', 'diagnostics.value.disabled');
+    }
+
+    /**
+     * An app key can log in as any user in its scope without their password, so we show the
+     * count next to the auth method. We never show secrets (they are only stored hashed).
+     */
+    private function appKeys(): array
+    {
+        if (!$this->appKeysEnabled) {
+            return $this->check(self::INFO, 'diagnostics.app_keys', 'diagnostics.value.disabled', 'diagnostics.app_keys.disabled', 'APP_KEYS_ENABLED=true');
+        }
+
+        try {
+            $count = (int) $this->connection->fetchOne(
+                'SELECT COUNT(*) FROM app_keys WHERE revoked_at IS NULL OR revoked_at > :now',
+                ['now' => (new \DateTimeImmutable())->format('Y-m-d H:i:s')]
+            );
+        } catch (\Throwable $e) {
+            return $this->check(self::INFO, 'diagnostics.app_keys', $e->getMessage());
+        }
+
+        return $this->check(self::INFO, 'diagnostics.app_keys', (string) $count, 'diagnostics.app_keys.help', null, $this->router->generate('app_key_index'));
+    }
+
+    /**
+     * ext-ldap is optional for Davis, but the LDAP method cannot work without it, and that surfaces as every login being refused.
      */
     private function authExtension(): array
     {
         $required = match (strtolower($this->authMethod)) {
             'ldap' => 'ldap',
-            'imap' => 'imap',
             default => null,
         };
 
