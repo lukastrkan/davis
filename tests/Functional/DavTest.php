@@ -249,6 +249,18 @@ class DavTest extends WebTestCase
         $this->assertResponseStatusCodeSame(207);
     }
 
+    public function testBaikalCompatibleRouteIsServed(): void
+    {
+        $client = static::createClient();
+
+        $_SERVER['HTTP_DEPTH'] = '0';
+        static::requestDav($client, 'PROPFIND', '/dav.php/calendars/test_user/default/', 'test_user:password');
+        unset($_SERVER['HTTP_DEPTH']);
+
+        $this->assertResponseStatusCodeSame(207);
+        $this->assertStringContainsString('/dav.php/calendars/test_user/default/', (string) $client->getResponse()->getContent());
+    }
+
     /**
      * Sabre parses calendar-timezone as a VCALENDAR wherever it reads it (free-busy,
      * calendar-query, multiget), so a client-stored bare TZID must not reach it.

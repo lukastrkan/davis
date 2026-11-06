@@ -428,6 +428,12 @@ class DAVController extends AbstractController
             $profiler->disable();
         }
 
+        // Sabre refuses any URI outside its base URI, so the Baïkal-compatible route needs its own
+        // (hrefs in responses then keep the `/dav.php/` prefix the client knows the server by).
+        if ('dav-old' === $request->attributes->get('_route')) {
+            $this->server->setBaseUri($this->generateUrl('dav-old', ['path' => '']));
+        }
+
         // We need to acknowledge the OPTIONS call before sabre/dav for public
         // calendars since we're circumventing the lib
         if ('OPTIONS' === $request->getMethod()) {
